@@ -1,0 +1,9 @@
+conda create -n plato_kinodynamic python=3.8
+conda activate plato_kinodynamic
+pip install -e .
+
+
+python scripts/01_generate_rollout_data.py --data-folder ./dataset
+python scripts/02_create_datasets.py --dataset_path ./dataset
+python scripts/03_training_model.py
+python scripts/visualize_model_rollout.py

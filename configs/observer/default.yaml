@@ -1,0 +1,10 @@
+type: "video"
+
+image:
+  path: "image path"
+
+video:
+  path: "video path"
+
+camera:
+  type: "realsense"

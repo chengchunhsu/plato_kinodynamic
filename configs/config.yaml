@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - observer: default
+  - estimator: default
+
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none

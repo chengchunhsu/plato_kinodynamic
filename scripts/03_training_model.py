@@ -24,8 +24,8 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser(description='Train model on dataset.')
-    parser.add_argument('--train_dataset_path', type=str, default="datasets/jenga_sim_data/straight_line/", help='Path to the training dataset')
-    parser.add_argument('--val_dataset_path', type=str, default="datasets/jenga_sim_data/straight_line_val/", help='Path to the validation dataset')
+    parser.add_argument('--train_dataset_path', type=str, default="./dataset/", help='Path to the training dataset')
+    parser.add_argument('--val_dataset_path', type=str, default="./dataset/", help='Path to the validation dataset')
     args = parser.parse_args()
 
     train_dataset_path = args.train_dataset_path

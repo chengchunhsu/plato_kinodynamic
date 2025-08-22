@@ -13,7 +13,7 @@ def run_script(args):
     process_id, data_folder, num_rollouts = args
     # Construct the command to run your script with the desired arguments
     command = [
-        'python', 'kinodynamic_scripts/jenga_data_generation_sp.py',
+        'python', 'scripts/jenga_data_generation_sp.py',
         '--process-id', str(process_id),
         '--data-folder', data_folder,
         '--num-rollouts', str(num_rollouts)

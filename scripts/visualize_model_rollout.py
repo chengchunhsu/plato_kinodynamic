@@ -15,7 +15,7 @@ def replay_state(mj_model, mj_data, qpos, qvel, mocap_pos, mocap_quat):
     mujoco.mj_setState(mj_model, mj_data, np.squeeze(mocap_quat), mujoco.mjtState.mjSTATE_MOCAP_QUAT)
     mujoco.mj_step1(mj_model, mj_data)
 
-experiment_path = "experiments/force_train/run_010"
+experiment_path = "experiments/run_001"
 
 dynamics_model = safe_device(DynamicsDeltaOutputModel())
 dynamics_model.load_state_dict(torch.load(os.path.join(experiment_path, "dynamics_model_delta.pth")))
@@ -23,7 +23,7 @@ dynamics_model.eval()
 device = dynamics_model.device
 
 idx = 10
-dataset_path = "datasets/force_vis"
+dataset_path = "dataset"
 with h5py.File(os.path.join(dataset_path, "training_data.hdf5"), "r") as f:
     key = list(f["data"].keys())[idx]
     # 1) block pose: (T,6)
@@ -142,8 +142,19 @@ with h5py.File(f'{dataset_path}/data.hdf5', 'r') as f:
             action_hist.append(actions[t])
 
         # display this rollout
-        media.show_video(
+        # media.show_video(
+        #     rollout_frames,
+        #     fps=60,
+        #     title=f"Model roll-out @ t={start}→{start + rollout_len}"
+        # )
+        
+        # save this rollout to folder
+        output_folder = os.path.join(experiment_path, "rollout_videos")
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, f"model_rollout_t{start}_{start + rollout_len}.mp4")
+        media.write_video(
+            output_path,
             rollout_frames,
-            fps=60,
-            title=f"Model roll-out @ t={start}→{start + rollout_len}"
+            fps=60
         )
+        print(f"Saved rollout video to: {output_path}")
