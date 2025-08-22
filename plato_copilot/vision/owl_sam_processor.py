@@ -17,34 +17,6 @@ from plato_copilot.vision.img_utils import *
 import os
 
 
-def resize_and_crop_depth_map(depth_map, new_size, bbox):
-    """
-    Resize a depth map and crop it using the given bounding box.
-    
-    Parameters:
-    - depth_map: 2D NumPy array (H x W) representing depth in millimeters/meters
-    - new_size: tuple (new_width, new_height)
-    - bbox: tuple (x, y, width, height) in the resized image coordinates
-    
-    Returns:
-    - cropped_depth: Cropped region of resized depth map
-    """
-    # Resize depth map (using nearest-neighbor to preserve depth integrity)
-    resized_depth = cv2.resize(depth_map, new_size, interpolation=cv2.INTER_NEAREST)
-    
-    # Unpack bbox
-    x, y, w, h = bbox
-    
-    # Ensure bbox is within image bounds
-    x = max(0, x)
-    y = max(0, y)
-    w = min(w, new_size[0] - x)
-    h = min(h, new_size[1] - y)
-    
-    # Crop the depth map
-    cropped_depth = resized_depth[y:y+h, x:x+w]
-    
-    return cropped_depth
 
 class OwlSAMProcessor:
     def __init__(self,
@@ -105,30 +77,10 @@ class OwlSAMProcessor:
         bbox = bbox_list[0].detach().cpu().numpy()
         return bbox
 
-
-    def get_cropped(self, original_image, original_depth=None):
+    def get_cropped(self, original_image):
         raw_image = resize_sam_image(original_image)
-        if original_depth is not None:
-            raw_depth = resize_sam_depth(original_depth)
-
         texts = [["a photo of jenga tower"]]
         self.owl_detector.detect(Image.fromarray(raw_image), texts)
-
-        # cropped_images = self.owl_detector.get_cropped_image()
-
-        boxes = self.owl_detector.boxes
-        cropped_images = []
-        cropped_depths = []
-        for box in boxes:
-            box = [round(i) for i in box.tolist()]
-            cropped_image = Image.fromarray(raw_image).crop((box[0], box[1], box[2], box[3]))
-            cropped_images.append(np.array(cropped_image))
-            if original_depth is not None:
-                cropped_depth = crop_depth(raw_depth, box)
-                cropped_depths.append(np.array(cropped_depth))
-
-        if original_depth is not None:
-            return cropped_images, cropped_depths
-        else:
-            return cropped_images
+        cropped_images = self.owl_detector.get_cropped_image()
+        return cropped_images
 

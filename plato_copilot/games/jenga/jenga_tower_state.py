@@ -131,7 +131,6 @@ class JengaTowerState():
 
     def visualize(self):
         fig = go.Figure()
-        print(len(self.offset), len(self.layout))
         for offset, layout in zip(self.offset, self.layout):
             i, j, k = layout
             off_x, off_y, off_yaw = offset

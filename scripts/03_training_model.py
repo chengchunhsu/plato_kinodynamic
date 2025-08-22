@@ -34,13 +34,13 @@ def main():
     val_dataset_path = args.val_dataset_path
     val_dataset = PlatoExampleDataset(file_path=f'{val_dataset_path}/training_data.hdf5')
 
-    val_data_loader = DataLoader(val_dataset, batch_size=128, shuffle=True, num_workers=32)
+    val_data_loader = DataLoader(val_dataset, batch_size=128, shuffle=True, num_workers=24)
 
     dynamics_model = safe_device(DynamicsDeltaOutputModel())
 
     # Create a data loader with batch size and enable shuffle
     batch_size = 128
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=32)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=24)
 
     adam_optimizer_kwargs = {
         "lr": 1e-3,
@@ -49,7 +49,7 @@ def main():
 
     optimizer = optim.Adam(dynamics_model.parameters(), **adam_optimizer_kwargs)
 
-    num_epochs = 60
+    num_epochs = 100
     print_loss_interval = 5
 
     best_loss = float("inf")
@@ -58,7 +58,7 @@ def main():
     train_loss_seq = []
     val_loss_seq = []
     for epoch in range(num_epochs):
-
+        dynamics_model.train()
         training_loss = 0
         for batch in tqdm(data_loader):
             loss = dynamics_model.compute_loss(batch)
@@ -72,6 +72,7 @@ def main():
         training_loss /= len(data_loader)
         val_loss = 0
 
+        dynamics_model.eval()
         # Compute validation loss
         with torch.no_grad():
             for val_batch in tqdm(val_data_loader):

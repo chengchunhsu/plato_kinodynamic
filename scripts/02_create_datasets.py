@@ -7,8 +7,8 @@ import mujoco
 from IPython.display import HTML
 
 import mediapy as media
-from plato.vision.o3d_utils import O3DPointCloud
-from plato.vision.plotly_utils import plotly_draw_3d_pcd
+# from plato_copilot.vision.o3d_utils import O3DPointCloud
+# from plato_copilot.vision.plotly_utils import plotly_draw_3d_pcd
 
 from robosuite.utils.transform_utils import quat2axisangle, convert_quat
 import argparse
@@ -39,6 +39,7 @@ def main():
                 # print(demo)
                 xml = f['data'][demo].attrs['xml']
                 block_name = f['data'][demo].attrs['block_name']
+                geom_attributes = f['data'][demo].attrs['geom_attributes']
 
                 mj_model = mujoco.MjModel.from_xml_string(xml)
                 mj_data = mujoco.MjData(mj_model)
@@ -54,9 +55,15 @@ def main():
                 object_axisAngle = np.array([quat2axisangle(convert_quat(q, to="xyzw")) for q in object_quat])
                 # print(block_name, target_pos[0])
                 # renderer = mujoco.Renderer(mj_model, 480, 640)
+                mocap_pos = f['data'][demo]['mocap_pos'][:].squeeze(axis=1)
+                mocap_quat = f['data'][demo]['mocap_quat'][:].squeeze(axis=1)
+                mocap_axisAngle = np.array([quat2axisangle(convert_quat(q, to="xyzw")) for q in mocap_quat])
                 ep_grp = data_grp.create_group(f"demo_{count}")
                 ep_grp.attrs["traj_idx"] = demo
+                ep_grp.attrs["geom_attributes"] = geom_attributes
                 ep_grp.create_dataset("object_pose", data=np.concatenate([object_pos, object_axisAngle], axis=1))
+                ep_grp.create_dataset("mocap_pose", data=np.concatenate([mocap_pos, mocap_axisAngle], axis=1))
+                ep_grp.create_dataset("force_feedback", data=f['data'][demo]['force_feedback'])
                 # ep_grp.create_dataset("object_pos", data=target_pos[:, :3])
                 # ep_grp.create_dataset("object_quat", data=target_pos[:, 3:])
                 ep_grp.create_dataset("actions", data=f['data'][demo]['actions'])

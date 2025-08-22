@@ -3,6 +3,7 @@ import cv2
 import colorsys
 
 from PIL import Image
+from matplotlib import pyplot as plt
 
 class ImageProcessor():
     def __init__(self):
@@ -232,44 +233,13 @@ def resize_sam_image(image, sam_model="xl0"):
     raw_image = np.array(raw_image)
     return raw_image
 
-def resize_sam_depth(depth_map, sam_model="xl0"):
-    H, W = depth_map.shape
-
-    # Determine max size based on SAM model
-    max_size = 1024 if sam_model in ["xl0", "xl1"] else 512
-
-    new_W = W
-    new_H = H
-    scaling = 1
-
-    if H > W and H > max_size:
-        new_H = max_size
-        new_W = int(W * (new_H / H))
-        scaling = new_H / H
-    elif W > max_size:
-        new_W = max_size
-        new_H = int(H * (new_W / W))
-        scaling = new_W / W
-
-    # Resize the depth map using nearest-neighbor to preserve depth values
-    resized_depth = cv2.resize(depth_map, (new_W, new_H), interpolation=cv2.INTER_NEAREST)
-    resized_depth = np.array(resized_depth)
-    return resized_depth
-
-def crop_depth(depth, bbox):
-    H, W = depth.shape
-
-    # Scale the bbox coordinates to match resized image (if needed)
-    x1, y1, x2, y2 = bbox
-    x1 = int(np.clip(x1, 0, W - 1))
-    y1 = int(np.clip(y1, 0, H - 1))
-    x2 = int(np.clip(x2, 0, W))
-    y2 = int(np.clip(y2, 0, H))
-
-    # Ensure coordinates are valid
-    if x2 <= x1 or y2 <= y1:
-        raise ValueError("Invalid bbox: (x2, y2) must be greater than (x1, y1)")
-
-    # Crop the resized depth map
-    cropped_depth = depth[y1:y2, x1:x2]
-    return cropped_depth
+def show_mask(mask, ax, obj_id=None, random_color=False):
+    if random_color:
+        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    else:
+        cmap = plt.get_cmap("tab10")
+        cmap_idx = 0 if obj_id is None else obj_id
+        color = np.array([*cmap(cmap_idx)[:3], 0.6])
+    h, w = mask.shape[-2:]
+    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    ax.imshow(mask_image)

@@ -29,7 +29,6 @@ def main():
     parser.add_argument('--num-rollouts', default=4, type=int)
     args = parser.parse_args()
 
-    num_processes = args.num_processes
     data_folder = args.data_folder
     os.makedirs(data_folder, exist_ok=True)
     num_processes = args.num_processes
@@ -51,6 +50,7 @@ def main():
             ep_grp = data_grp.create_group(f"traj_{num_traj}")
             ep_grp.attrs["xml"] = demo_file["data"][key].attrs["xml"]
             ep_grp.attrs["block_name"] = demo_file["data"][key].attrs["block_name"]
+            ep_grp.attrs['geom_attributes'] = demo_file["data"][key].attrs["geom_attributes"]
             # ep_grp.attrs["info"] = demo_file["data"][key].attrs["info"]
             for k in demo_file["data"][key]:
                 ep_grp.create_dataset(k, data=demo_file["data"][key][k])

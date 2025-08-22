@@ -1,10 +1,13 @@
 import os
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 from easydict import EasyDict
 from fontTools.ttx import process
 from jinja2.compiler import generate
+from sam2.modeling import sam2_base
+from sam2.build_sam import build_sam2, build_sam2_video_predictor
 
 from plato_copilot.vision.img_utils import *
 from plato_copilot.vision.point_cloud_utils import *
@@ -19,13 +22,11 @@ logger = get_copilot_logger()
 #     {"fx": 614.0392456054688, "fy": 614.16455078125, "cx": 329.4415283203125, "cy": 241.68116760253906})
 
 class JengaTowerEstimator():
-    def __init__(self, camera_intrinsics, config):
-        # TODO: 1880-2330
+    def __init__(self, camera_intrinsics, config, video_dir=None):
         self.config = config
         self.jenga_tower_states = JengaTowerState()
 
         # JengaBlockDetector detects individual faces. We need to gather this information and esitmate individual blocks.
-        self.jenga_block_detector = JengaBlockDetector()
         # self.sam = SAM()
         # self.pt_tracker = PTTracker()
         self.rgb_sequence = []
@@ -45,6 +46,11 @@ class JengaTowerEstimator():
         })
         logger.debug("Create JengaBlockDetector object for detecting jenga blocks at the initial observation")
         self.detector = JengaBlockDetector(self.camera_matrix, sam_config, num_runs=100)
+
+        checkpoint = "../third_party/sam_checkpoints/sam2.1_hiera_large.pt"
+        model_cfg = "sam2.1_hiera_l.yaml"
+        self.predictor = build_sam2_video_predictor(model_cfg, checkpoint)
+        self.video_dir = video_dir
 
     def reset(self):
         self.rgb_sequence = []
@@ -76,6 +82,7 @@ class JengaTowerEstimator():
 
     def add_files(self, extension, folder):
         files = [f for f in os.listdir(folder) if f.endswith(extension)]
+        files.sort()
         for file in files:
             if extension == ".tiff":
                 depth_image = np.array(load_depth(os.path.join(folder, file)), dtype=np.float32)
@@ -84,95 +91,32 @@ class JengaTowerEstimator():
                 img = np.array(Image.open(os.path.join(folder, file)))
                 self.rgb_sequence.append(img)
 
-    def generate_point_prompts(self, coord, layer, layer_orientation, detection_info):
-        # along vector currently always points from left to right
-        block_height = detection_info["probable_block_height"]
-        block_width = detection_info["block_width"] / 3.0
-        primary_face_top_left = detection_info["primary_face_top_left"]
-        primary_face_along = detection_info["primary_face_basis"][0] # this is left to right
-        respective_face_along = primary_face_along # this points from the middle to edge of the primary face
-        primary_face_down = detection_info["primary_face_basis"][1]
+    def get_closest_block(self, img_coord_of_block, block_masks):
+        # get the closest block to the camera
+        mn_dist = 10000
+        closest_block = (-1, -1)  # layer and block number
+        for layer in block_masks:
+            for block in block_masks[layer]:
+                total_dist = 0
+                total_cnt = 0
+                for coord in block_masks[layer][block]:
+                    dist = np.linalg.norm(coord[:2] - img_coord_of_block)
+                    if dist < 50:
+                        total_dist += dist
+                        total_cnt += 1
 
+                if total_cnt == 0:
+                    continue
 
-        if detection_info["primary_face_side"]:
-            respective_face_along = -respective_face_along
+                dist_avg = total_dist / total_cnt
 
-        if layer_orientation:
-            # horizontal
-            tower_middle_column_top = primary_face_top_left + primary_face_along * block_width * 1.5
-            layer_z_vector = primary_face_down * block_height * (layer + 0.5)
-            layer_start_point = tower_middle_column_top + layer_z_vector
+                if dist_avg < mn_dist:
+                    mn_dist = dist_avg
+                    closest_block = (layer, block)
 
-            return generate_point_prompt(layer_start_point, primary_face_along, primary_face_down, top_pt=(layer == 0), bot_pt=(layer == detection_info["num_layers"] - 1))
-        else:
-            # vertical
+        return closest_block
 
-            pass
-
-
-    def determine_location(self, tower: JengaTowerState, block_id, detection_info):
-        # given the tower, coordinate, and tower info
-        # figure out a mask for the given block
-        logger.warn("Assuming block is on the primary face for now!")
-        block_coordinate = tower.get_block_coordinates(block_id)
-        num_layers = detection_info["num_layers"]
-        top_layer_orientation = detection_info["top_horizontal_to_camera"]
-
-        layer = num_layers - block_coordinate[2]
-        block = block_coordinate[0] if layer % 2 == 1 else block_coordinate[1]
-
-        # determine whether layer is horizontal or vertical
-        # True -> horizontal, False -> vertical
-        layer_orientation = top_layer_orientation if layer % 2 == 0 else not top_layer_orientation
-
-        # get the non top and bottom faces of the block
-        block_faces_x, block_faces_y, _ = tower.get_block_faces(block_id)
-
-        assert len(block_faces_x) == 2
-        assert len(block_faces_y) == 2
-
-        # based on the tower orientation, get the one or two faces that can be seen
-        primary_face_basis = detection_info["primary_face_basis"]
-        non_primary_face_basis = detection_info["non_primary_face_basis"]
-
-        final_faces = []
-        if layer_orientation:
-            # horizontal
-            if top_layer_orientation:
-                max_x_face = max(block_faces_x.keys())
-                final_faces.append(block_faces_x[max_x_face])
-
-                max_y_face = max(block_faces_y.keys())
-                if abs(max_y_face - tower.block_width) < 0.01:
-                    final_faces.append(block_faces_y[max_y_face])
-            else:
-                # get the max-x face, there are two keys in the block_faces_x dictionary
-                max_x_face = max(block_faces_x.keys())
-                if abs(max_x_face - tower.block_width) < 0.01:
-                    final_faces.append(block_faces_x[max_x_face])
-
-                min_y_face = min(block_faces_y.keys())
-                final_faces.append(block_faces_y[min_y_face])
-        else:
-            # vertical
-            if top_layer_orientation:
-                max_x_face = max(block_faces_x.keys())
-                if abs(max_x_face - tower.block_width) < 0.01:
-                    final_faces.append(block_faces_y[max_x_face])
-
-                max_y_face = max(block_faces_y.keys())
-                final_faces.append(block_faces_x[max_y_face])
-            else:
-                max_x_face = max(block_faces_x.keys())
-                final_faces.append(block_faces_x[max_x_face])
-
-                min_y_face = min(block_faces_y.keys())
-                if abs(min_y_face - 0) < 0.01:
-                    final_faces.append(block_faces_y[min_y_face])
-
-        # TODO: turn these faces into masks in the image
-
-    def track_block(self, block_coordinate, video_folder):
+    def track_block(self, img_coord_of_block, video_folder):
         logger.warn("Tracking currently is for a full video, not a live stream yet")
         logger.warn("Currently only tracking blocks visible on the primary face")
         # load the images from the folder into the array
@@ -181,15 +125,52 @@ class JengaTowerEstimator():
 
         processed = 0
 
-        # first do a detect on one image and get the necessary tower specs
-        detection_result = self.detector.segment(rgb_image=self.rgb_sequence[processed], depth_image=self.depth_sequence[processed])
-        self.jenga_tower_states = self.detector.get_jenga_tower(rgb_image=self.rgb_sequence[processed], depth_image=self.depth_sequence[processed])
+        # first get the masks of all the blocks we can see
+        logger.info("Getting the masks of all the blocks in the first frame of the video")
+        block_masks, seg_img = self.detector.segment_all_faces(rgb_image=self.rgb_sequence[processed], depth_image=self.depth_sequence[processed])
 
-        # generate the mask for the block of interest
-        mask = self.determine_location(self.jenga_tower_states, block_coordinate, detection_result)
+        # get the closest block to the camera
+        logger.info("Getting the closest block coordinate to the user selected block")
+        closest_block = self.get_closest_block(img_coord_of_block, block_masks)
+        logger.debug(f"Closest block is: {closest_block}")
+
+        # get the mask of the closest block for the image
+        logger.info("Getting the mask of the closest block to the user selected block")
+        mask = np.zeros(self.rgb_sequence[processed].shape[:2], dtype=np.float32)
+        for coord in block_masks[closest_block[0]][closest_block[1]]:
+            mask[int(coord[1]), int(coord[0])] = 1
 
         # pass through SAM2 video predictor and keep track of mask
+        logger.info("Tracking the block through the video")
+        video_segments = {}  # video_segments contains the per-frame segmentation results
 
+        # array that stores the masks of the selected block throughout the video
+        block_states = []
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            state = self.predictor.init_state(video_folder)
+
+            # add new prompts and instantly get the output on the same frame
+            frame_idx, object_ids, masks = self.predictor.add_new_mask(frame_idx=0, obj_id=1, inference_state=state, mask=mask) #(state, None):
+
+            # propagate the prompts to get masklets throughout the video
+            for frame_idx, object_ids, masks in self.predictor.propagate_in_video(state):
+                video_segments[frame_idx] = {
+                    out_obj_id: (masks[i] > 0.0).cpu().numpy()
+                    for i, out_obj_id in enumerate(object_ids)
+                }
+
+        # visualize the segmentation results
+        vis_frame_stride = 1
+        plt.close("all")
+        for out_frame_idx in range(1, len(self.rgb_sequence), vis_frame_stride):
+            plt.figure(figsize=(6, 4))
+            plt.title(f"frame {out_frame_idx}")
+            plt.imshow(Image.open(os.path.join(video_folder, "{:09}".format(out_frame_idx) + ".jpg")))
+            for out_obj_id, out_mask in video_segments[out_frame_idx].items():
+                show_mask(out_mask, plt.gca(), obj_id=out_obj_id)
+
+            plt.savefig(f"../test_tmp/video_sam_frames/seg_{out_frame_idx}.png", dpi=300, bbox_inches='tight')
+            plt.close()
 
         # use open3d library to do 3d back projection
         pass

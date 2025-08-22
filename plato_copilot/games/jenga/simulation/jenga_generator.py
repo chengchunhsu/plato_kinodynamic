@@ -118,7 +118,8 @@ class JengaXMLGenerator:
         ground = ET.Element('geom', name="ground",type='plane', material="groundplane", group="2", pos=floor_pos, size='10 10 1', rgba='0.8 0.9 0.8 1')
         world_body.append(light)
         world_body.append(ground)
-        side_camera = ET.Element('camera', name="side", pos="-0.546 -0.5 0.716", xyaxes="0.866 -0.500 0.000 0.171 0.296 0.940" , fovy="60")
+        side_camera = ET.Element('camera', name="side", pos="-1.323 -2.179 2.020", xyaxes="0.849 -0.529 -0.000 0.166 0.265 0.950" , fovy="60")
+
         world_body.append(side_camera)
 
         # Add jenga blocks

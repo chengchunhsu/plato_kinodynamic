@@ -28,6 +28,8 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from easydict import EasyDict
 from PIL import Image
 from matplotlib import pyplot as plt
+from sympy.benchmarks.bench_meijerint import normal
+
 from plato_copilot.vision.owl_sam_processor import OwlSAMProcessor
 from sklearn.cluster import KMeans
 
@@ -37,7 +39,6 @@ from plato_copilot.vision.img_utils import *
 from plato_copilot.vision.point_cloud_utils import *
 from plato_copilot.games.jenga.jenga_tower_state import *
 
-from plato_copilot.utils.vis_utils import overlay_segmentation, save_block_masks_post
 from plato_copilot.utils.log_utils import get_copilot_logger
 logger = get_copilot_logger()
 
@@ -66,19 +67,23 @@ class JengaBlockDetector:
     def orient_image_pcd(self, rgb_image, depth_image, camera_matrix):
         pcd = scene_pcd_only_fn(rgb_image, np.array(depth_image[:, :, 0], dtype=np.float32), camera_matrix, np.eye(4).astype(np.float32))
 
+        pcd = self.remove_far_away_points(pcd, 1) # remove far away points
+
         normal_pcd = pcd_normal_vectors(pcd.pcd)
         normal_pcd.paint_uniform_color([0, 0, 0])
 
+        # normal_pcd.orient_normals_to_align_with_direction(np.array([0, 0, 1], dtype=np.float32))
         normal_pcd.orient_normals_towards_camera_location(camera_location=np.array([0, 0, 0], dtype=np.float32))
 
         pcd = O3DPointCloud()
         pcd.create_from_pcd(normal_pcd)
 
-        # plotly_draw_3d_pcd(np.asarray(normal_pcd.points))
+        base_face_pcd = self.cluster_base_normals(pcd)
+
+        # plotly_draw_3d_pcd(np.asarray(base_face_pcd.pcd.points))
 
         # get the estimated plane model
-
-        plane_model = pcd.plane_estimation(verbose=False)["plane_model"]
+        plane_model = base_face_pcd.plane_estimation(verbose=False)["plane_model"]
         transformation_matrix = estimate_rotation(plane_model, z_up=False)
 
         temp_pcd = copy.deepcopy(normal_pcd)
@@ -87,7 +92,12 @@ class JengaBlockDetector:
         # estimate plane again
         pcd = O3DPointCloud()
         pcd.create_from_pcd(temp_pcd)
-        plane_model = pcd.plane_estimation(verbose=False)["plane_model"]
+        # logger.debug(f"Plane model: {plane_model}")
+
+        base_face_pcd = self.cluster_base_normals(pcd)
+
+        plane_model = base_face_pcd.plane_estimation(verbose=False)["plane_model"]
+        logger.debug(f"Transformed plane model: {plane_model}")
 
         translate_z = plane_model[3] / plane_model[2]
         transformation_matrix[2, 3] = translate_z
@@ -98,10 +108,39 @@ class JengaBlockDetector:
 
         final_pcd = pcd_normal_vectors(temp_pcd)
 
+        # plotly_draw_3d_pcd(np.asarray(final_pcd.points))
+
         vis_info = {"normal_pcd": np.asarray(normal_pcd.points)}
 
         return final_pcd, transformation_matrix, vis_info
 
+    def cluster_base_normals(self, pcd):
+        transformed_kdtree = get_kdtree_flann(pcd.pcd)
+
+        normal_vectors = set()
+        for pts in np.asarray(pcd.pcd.points):
+            normal_vector, idx = find_closest_point(pcd.pcd, transformed_kdtree, pts)
+            normal_vectors.add(tuple([round(normal_vector[0], 3), round(normal_vector[1], 3), round(normal_vector[2], 3), idx]))
+
+        normal_vectors_with_idx = [list(normal_vector) for normal_vector in normal_vectors]
+        normal_vectors = [normal_vector[:3] for normal_vector in normal_vectors]
+        normal_idx = [normal_vector[3] for normal_vector in normal_vectors_with_idx]
+
+        vector_labels, centroids, centroid_labels = kmeans_3d(normal_vectors, n_clusters=3)
+
+        label_sz = {}
+        for label in vector_labels:
+            label_sz[label] = label_sz.get(label, 0) + 1
+
+        primary_face = max(label_sz, key=label_sz.get)
+
+        primary_face_indices = [i for i, label in enumerate(vector_labels) if label == primary_face]
+
+        primary_face_points = pcd.pcd.select_by_index([normal_idx[i] for i in primary_face_indices])
+        primary_face_pcd = O3DPointCloud()
+        primary_face_pcd.create_from_pcd(primary_face_points)
+
+        return primary_face_pcd
 
     def cluster_surface_normals(self, final_pcd, overlay_masks, depth_image, camera_matrix, transformation_matrix):
         transformed_kdtree = get_kdtree_flann(final_pcd)
@@ -144,7 +183,6 @@ class JengaBlockDetector:
 
         primary_face = max(label_sz, key=label_sz.get)
         non_primary_face = min(label_sz, key=label_sz.get)
-        print("Non primary face count: ", non_primary_face)
 
         primary_face_indices = [i for i, label in enumerate(vector_labels) if label == primary_face]
         non_primary_face_indices = [i for i, label in enumerate(vector_labels) if label == non_primary_face]
@@ -474,6 +512,19 @@ class JengaBlockDetector:
 
         return num_layer_estimate
 
+    def remove_far_away_points(self, pcd, threshold_y):
+        points = np.asarray(pcd.pcd.points)
+        keep = []
+        for i in range(len(points)):
+            if points[i][2] < threshold_y:
+                keep.append(points[i])
+
+        keep = np.array(keep)
+        res_pcd = O3DPointCloud()
+        res_pcd.create_from_points(keep)
+        # plotly_draw_3d_pcd(np.asarray(res_pcd.pcd.points))
+        return res_pcd
+
     def segment(self, rgb_image, depth_image):
         # initial segment
         owl_sam_processor = OwlSAMProcessor()
@@ -488,11 +539,13 @@ class JengaBlockDetector:
         logger.info("Clustering surface normals")
         primary_face_pcd, vis_info, non_primary_face_pcd = self.cluster_surface_normals(final_pcd, overlay_masks, depth_image, self.camera_matrix, transformation_matrix)
 
-        # plotly_draw_3d_pcd(np.asarray(primary_face_pcd.pcd.points))
+        # plotly_draw_3d_pcd(np.asarray(final_pcd.points))
 
         # construct the full primary face plane
         logger.info("Constructing the primary face plane")
         primary_face_pcd, primary_face_plane, primary_face_points, vis_info = self.get_plane_of_primary_face(primary_face_pcd, final_pcd)
+
+        # plotly_draw_3d_pcd(np.asarray(primary_face_points.points))
 
         # get the convex hull of the primary face and crop the image
         logger.info("Constructing the convex hull of the primary face points")
@@ -806,28 +859,25 @@ class JengaBlockDetector:
                 for image_coord in image_coords:
                     block_masks_post[layer][i].append(image_coord)
 
-        # segmented_overlay_image = np.zeros((rgb_image.shape[0], rgb_image.shape[1], 3), dtype=np.uint8)
+        segmented_overlay_image = np.zeros((rgb_image.shape[0], rgb_image.shape[1], 3), dtype=np.uint8)
 
-        # # print(block_masks_post.keys())
-        # colors = 0
-        # for layer in block_masks_post:
-        #     for i in range(3):
-        #         for coord in block_masks_post[layer][i]:
-        #             if coord[0] < 0 or coord[0] >= segmented_overlay_image.shape[1] or coord[1] < 0 or coord[1] >= segmented_overlay_image.shape[0]:
-        #                 continue
+        # print(block_masks_post.keys())
+        colors = 0
+        for layer in block_masks_post:
+            for i in range(3):
+                for coord in block_masks_post[layer][i]:
+                    if coord[0] < 0 or coord[0] >= segmented_overlay_image.shape[1] or coord[1] < 0 or coord[1] >= segmented_overlay_image.shape[0]:
+                        continue
 
-        #             # assign new color for every mask
-        #             segmented_overlay_image[int(coord[1]), int(coord[0])] = id_to_rgb(colors)
-        #         colors += 1
+                    # assign new color for every mask
+                    segmented_overlay_image[int(coord[1]), int(coord[0])] = id_to_rgb(colors)
+                colors += 1
 
-        # for y in range(len(segmented_overlay_image)):
-        #     for x in range(len(segmented_overlay_image[0])):
-        #         if np.all(segmented_overlay_image[y][x] == 0):
-        #             segmented_overlay_image[y][x] = rgb_image[y][x]
+        for y in range(len(segmented_overlay_image)):
+            for x in range(len(segmented_overlay_image[0])):
+                if np.all(segmented_overlay_image[y][x] == 0):
+                    segmented_overlay_image[y][x] = rgb_image[y][x]
 
-        save_block_masks_post(block_masks_post, 'block_masks_post.pkl')
-
-        segmented_overlay_image = overlay_segmentation(rgb_image, block_masks_post)
         return block_masks_post, segmented_overlay_image
 
     def get_jenga_tower(self, rgb_image, depth_image):

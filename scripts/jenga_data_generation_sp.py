@@ -29,6 +29,7 @@ from flax import struct
 from matplotlib import pyplot as plt
 # from ml_collections import config_dict
 import mujoco
+from mujoco import viewer
 # from mujoco import mjx
 from tqdm import trange
 import h5py
@@ -71,6 +72,7 @@ def main():
     args = parser.parse_args()
 
     debug = False
+    render = False
 
     config = EasyDict({
         "floor_pos": np.array([0, 0, 0.28]),
@@ -102,20 +104,20 @@ def main():
     scene_option = mujoco.MjvOption()
     scene_option.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = False
 
-    duration = 4  # (seconds)
-    framerate = 60  # (Hz)
+    duration = 10  # (seconds)
+    framerate = 50 # (HZ)
+    timestep = 0.002
+    num_steps = int(1 / framerate / timestep)
 
     num_rollouts = args.num_rollouts
     print(mujoco.MjvCamera.lookat)
     # get the camera position
     print(mujoco.MjvCamera.distance)
 
-    render = True
-
     data_example_file = h5py.File(f'{args.data_folder}/{args.process_id:03d}.hdf5', 'w')
     data_grp = data_example_file.create_group('data')
 
-    use_straight_line = True
+    use_straight_line = False
 
     for i in trange(num_rollouts):
         frames = []
@@ -130,18 +132,31 @@ def main():
         mj_data = mujoco.MjData(mj_model)
         renderer = mujoco.Renderer(mj_model, 480, 640)
 
+        mocap_body_id = mujoco.mj_name2id(
+            mj_model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            "mocap"
+        )
+
         mujoco.mj_resetData(mj_model, mj_data)
         # mocap_y = np.random.uniform(0.01, 0.2)
         # mocap_z = np.random.uniform(0.35, 0.6)
         # config.mocap.pos[1] = mocap_y
         # config.mocap.pos[2] = mocap_z
+        if render:
+            viewer = mujoco.viewer.launch_passive(mj_model, mj_data)
+
+            # Enable wireframe rendering of the entire scene.
+            viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_WIREFRAME] = 1
+            viewer.sync()
+
         qpos_list = []
         qvel_list = []
         time_list = []
         mocap_pos_list = []
         mocap_quat_list = []
         actions = []
-        freq = 20
+        force_feedback_list = []
 
         for _ in range(2000):
             mujoco.mj_step(mj_model, mj_data)
@@ -150,8 +165,16 @@ def main():
         mocap_y = block_pos[1]
         mocap_z = block_pos[2]
 
-        mocap_init_pos = np.array([[-block_sizes[1] - 0.05, mocap_y, mocap_z]])
-        mj_data.mocap_pos = mocap_init_pos
+        mj_data.mocap_pos = np.array([[-block_sizes[1] / 2 - 0.05, mocap_y, mocap_z]])
+
+        linear_vel = np.random.uniform(low=[0.02, 0.0, 0.0],
+                                       high = [0.05, 0.0, 0.0])  # m/s
+
+        angular_vel = np.random.uniform(low=[0.0, 0.0, -0.05],
+                                        high = [0.0, 0.0, 0.05])  # rad/s
+
+        lin_noise_std = 0.001  # m/s
+        ang_noise_std = 0.02  # rad/s
 
         count = 0
         init_time = mj_data.time
@@ -162,50 +185,73 @@ def main():
             time_list.append(mj_data.time)
             mocap_pos_list.append(np.copy(mj_data.mocap_pos))
             mocap_quat_list.append(np.copy(mj_data.mocap_quat))
+            mujoco.mj_rnePostConstraint(mj_model, mj_data)
+            force_feedback_list.append(np.copy(mj_data.cfrc_ext[mocap_body_id]))
 
             # if len(frames) < mj_data.time * framerate and render:
             renderer.update_scene(mj_data, camera=0, scene_option=scene_option)
             pixels = renderer.render()
             frames.append(pixels)
 
-            straight_line_action = np.array([[block_sizes[0] * 2, 0., -0.001]]) * 0.05
-
-            curve_action_seq = [np.array([0.1, 0., -0.001]) * 0.05] * 200
-            for j in range(30, len(curve_action_seq)):
-                curve_action_seq[j] = curve_action_seq[j] + np.array([0., 0.1, 0.0]) * 0.05
-
-            if use_straight_line:
-                action = straight_line_action
-            else:
-                action = curve_action_seq[count]
-            # action = np.array([[0.1, 0., -0.001]]) * 0.05
-
             body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, block_name)
             joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, f"{block_name}_freejoint")
             freejoint_qpos_addr = mj_model.jnt_qposadr[joint_id]
 
-            action = action + np.random.uniform(-0.001, 0.001, action.shape) * np.array([1, 1, 0]) * (
-                        len(actions) % 10 == 0)
-            actions.append(action)
-            unit_action = action / freq
-            for _ in range(freq):
-                mujoco.mj_step(mj_model, mj_data)
-                mj_data.mocap_pos = mj_data.mocap_pos + unit_action
-            count += 1
+            lv_noisy = linear_vel  + np.random.normal(0, lin_noise_std,  size=3)
+            av_noisy = angular_vel + np.random.normal(0, ang_noise_std, size=3)
 
-        # mjx implementation. Commented out for now. 
-        # while mj_data.time < duration:
-        #     mujoco.mj_step(mj_model, mj_data)
-        #     qpos_list.append(np.copy(mj_data.qpos))
-        #     qvel_list.append(np.copy(mj_data.qvel))
-        #     time_list.append(mj_data.time)
-        #     mocap_pos_list.append(np.copy(mj_data.mocap_pos))
-        #     mocap_quat_list.append(np.copy(mj_data.mocap_quat))
-        #     if len(frames) < mj_data.time * framerate:
-        #         # renderer.update_scene(mj_data, camera=0, scene_option=scene_option)
-        #         # pixels = renderer.render()
-        #         # frames.append(pixels)
-        #         mj_data.mocap_pos += np.array([[0.7, 0., -0.001]]) / (duration * framerate)
+            lin_step = lv_noisy * timestep  # tool-frame
+            ang_step = av_noisy * timestep  # tool-frame
+
+            # action = action + np.random.uniform(-0.001, 0.001, action.shape) * np.array([1, 1, 0]) * (
+            #             len(actions) % 10 == 0)
+            # actions.append(action)
+            # unit_action = action / freq
+            for _ in range(num_steps):
+                mujoco.mj_step(mj_model, mj_data)
+
+                # translate: rotate the tool-frame lin_step into world frame
+                q = mj_data.mocap_quat[0]  # [w,x,y,z]
+                v_body = lin_step  # (3,)
+                qw, qx, qy, qz = q
+                qv = np.array([qx, qy, qz])
+                t = 2.0 * np.cross(qv, v_body)
+                v_world = v_body + qw * t + np.cross(qv, t)
+                mj_data.mocap_pos += v_world  # updates (1,3)
+
+                # rotate: small-angle quaternion about tool Z
+                ω = ang_step  # [0,0,ωz*dt]
+                θ = np.linalg.norm(ω)
+                if θ > 1e-8:
+                    axis = ω / θ
+                    dq = np.array([
+                        np.cos(θ / 2.0),
+                        *(axis * np.sin(θ / 2.0))
+                    ])
+                else:
+                    dq = np.array([1.0, 0, 0, 0])
+
+                # right-multiply into current tool quat
+                qc = mj_data.mocap_quat[0]
+                w1, x1, y1, z1 = qc
+                w0, x0, y0, z0 = dq
+                new_q = np.array([
+                    w1 * w0 - x1 * x0 - y1 * y0 - z1 * z0,
+                    w1 * x0 + x1 * w0 + y1 * z0 - z1 * y0,
+                    w1 * y0 - x1 * z0 + y1 * w0 + z1 * x0,
+                    w1 * z0 + x1 * y0 - y1 * x0 + z1 * w0,
+                ])
+                mj_data.mocap_quat[0] = new_q / np.linalg.norm(new_q)
+
+                if render:
+                    viewer.user_scn.ngeom = i
+                    viewer.sync()
+
+            #  compute the 7-D action (tool frame)
+            action = np.concatenate([lin_step * num_steps, ang_step * num_steps])
+            actions.append(action)
+
+            count += 1
 
         print(f'demo_{i}')
         demo_grp = data_grp.create_group(f'demo_{i}')
@@ -213,6 +259,7 @@ def main():
         demo_grp.create_dataset('qvel', data=qvel_list)
         demo_grp.create_dataset('mocap_pos', data=mocap_pos_list)
         demo_grp.create_dataset('mocap_quat', data=mocap_quat_list)
+        demo_grp.create_dataset('force_feedback', data=force_feedback_list)
         demo_grp.create_dataset('actions', data=actions)
         demo_grp.attrs["xml"] = xml
         demo_grp.attrs["block_name"] = block_name

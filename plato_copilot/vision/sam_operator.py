@@ -19,7 +19,7 @@ from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
 from efficientvit.models.efficientvit.sam import EfficientViTSamAutomaticMaskGenerator, EfficientViTSamPredictor
 from efficientvit.models.utils import build_kwargs_from_config
-from efficientvit.sam_model_zoo import create_efficientvit_sam_model
+from efficientvit.sam_model_zoo import create_sam_model
 from efficientvit.apps.utils import parse_unknown_args
 
 from plato_copilot import PLATO_COPILOT_ROOT_PATH
@@ -289,7 +289,7 @@ class EfficientSAMOperator(SAMOperator):
 
     def init(self):
 
-        efficientvit_sam = create_efficientvit_sam_model("efficientvit-sam-xl0", #self.model_type, 
+        efficientvit_sam = create_sam_model(self.model_type, 
                                             True, 
                                             self.checkpoint).cuda().eval()        
         self.predictor = EfficientViTSamPredictor(efficientvit_sam)

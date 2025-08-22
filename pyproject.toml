@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plato-kinodynamic"
+version = "0.1.0"
+description = "Plato kinodynamic planning project"
+dependencies = [
+    # Core ML/Scientific Computing
+    "torch==2.4.1",
+    "torchvision==0.19.1",
+    "h5py",
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "einops",
+    "easydict",
+    
+    # Computer Vision & Image Processing
+    "opencv-python",
+    "matplotlib",
+    "plotly",
+    "Pillow",
+    
+    # AI Models & Transformers
+    # "transformers",
+    # "segment-anything",
+    
+    # 3D Processing
+    "open3d",
+    
+    # Simulation & Robotics
+    "mujoco",
+    "robomimic",
+    "robosuite",
+    
+    # JAX Ecosystem
+    "jax",
+    "flax",
+    "etils",
+    
+    # Utilities & Configuration
+    "pyyaml",
+    "pathlib",
+    "termcolor",
+    "requests",
+    "tqdm",
+    "imageio",
+    "mediapy",
+    "fonttools",
+    "jinja2",
+    "ipython",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["plato_copilot*"]
+
+# PyTorch CUDA index configuration
+[[tool.pip.index-url]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu124"
